@@ -1,19 +1,28 @@
 # Bibliometric project
 
+## Before you run the project, please download the [data folder](https://drive.google.com/drive/folders/13cxpHmu1mJhVKTjkJDTHu05nxG0WbHnK?usp=sharing) and add it to the project root folder.
+
+---
+
+
 ## Section A. Bibliometric insights from CREDS research outputs
 
 - **A1. Basic data cleansing, author id and name disambiguation** 
     - remove noise
-    - merge multiple ids 
+    - merge multiple ids
     - unify names
 - **A2. CREDS members author-topic Sankey diagram**
     - visualise author-concept distributions
+    <img src="output/sankey.png" alt="Alt text" title="Optional title">    
 - **A3. CREDS members author-topic & correlation heatmaps** 
     - find who and who share similar research interests
+    <img src="output/heatmap1.png" alt="Alt text" title="Optional title">    
+    <img src="output/heatmap2.png" alt="Alt text" title="Optional title">    
 - **A4. TSNE visualisation for CREDS members** 
     - show every CREDS member's position on a 2D plot (research interest based)
+    <img src="output/TSNE.png" alt="Alt text" title="Optional title">    
 - **A5. CREDS research concept vector** 
-    - a pooling vector representation of CREDS research direction
+    - A pooling vector representation of CREDS research direction
 - **A6. Retrieve citation data for CREDS members** 
     - Data collection via API
     - for workflow purposes
@@ -21,9 +30,9 @@
 - **A7. How do CREDS members cite each other?** 
     - An internal citing map of CREDS members
 - **A8. Who do CREDS members commonly cite the most?** 
-    - The top commonly cited authors of CREDS members
+    - The top commonly cited authors of CREDS members ([common_cited_authors.xlsx](https://github.com/DunnoHtL/CREDS_project/blob/master/output/commonly_cited_authors.xlsx))
 - **A9. What concepts are cited most by CREDS members?** 
-    - The top commonly cited concepts (topics) of CREDS members
+    - The top commonly cited concepts (topics) of CREDS members ([common_cited_topics.xlsx](https://github.com/DunnoHtL/CREDS_project/blob/master/output/commonly_cited_topics.xlsx))
 
 ## Section B. Construct Australian benchmarks for Education research
 
