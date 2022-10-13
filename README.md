@@ -2,6 +2,9 @@
 
 ## Before you run the project, please download the [data folder](https://drive.google.com/file/d/1LeAdV2_4zPQhXUp14c4ZP_hN5vlIgrEB/view?usp=sharing), unzip it, and add it to the project root folder.
 
+```
+pip install -r requirements.txt
+```
 ---
 
 
