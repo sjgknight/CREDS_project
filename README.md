@@ -1,6 +1,6 @@
 # Bibliometric project
 
-## Before you run the project, please download the [data folder](https://drive.google.com/drive/folders/13cxpHmu1mJhVKTjkJDTHu05nxG0WbHnK?usp=sharing) and add it to the project root folder.
+## Before you run the project, please download the [data folder](https://drive.google.com/file/d/1LeAdV2_4zPQhXUp14c4ZP_hN5vlIgrEB/view?usp=sharing), unzip it, and add it to the project root folder.
 
 ---
 
