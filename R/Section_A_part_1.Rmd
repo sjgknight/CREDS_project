@@ -165,7 +165,32 @@ au_concept_group = au_join_concept.groupby(by=['au_id', 'concept_id', 'au_name',
 NUM_TOPICS = 20  # Number of topic to show
 show_topics = [a[0] for a in Counter(list(au_concept_group['concept_name'])).most_common(NUM_TOPICS)]
 au_concept_group = au_concept_group.loc[au_concept_group['au_id'].isin(CREDS_au_ids)]
+```
 
+```{python}
+# filter df to do visualisation
+CREDS_concept_vis = au_concept_group.loc[au_concept_group['concept_name'].isin(show_topics)]
+topic_sankey = hv.Sankey(CREDS_concept_vis, kdims=["au_name", "concept_name"], vdims=["paper_id"])
+
+# generate a Sankey diagram and configure its appearance
+topic_sankey.opts(
+    cmap="Spectral_r",
+    label_position='outer',
+    edge_color='au_name', edge_line_width=0.1,
+    node_alpha=1.0, 
+    node_width=50, 
+    node_sort=False, 
+    bgcolor="white",
+    title=f"Figure 1. What are top {NUM_TOPICS} reserach topics of CREDS members?"
+)
+
+# show the Sankey diagram
+topic_sankey.opts(width=1200, height=800)
+```
+
+**Here I'd like to be able to filter by concept level in that DF to adjust the sankey**
+
+```{python}
 # filter df to do visualisation
 CREDS_concept_vis = au_concept_group.loc[au_concept_group['concept_name'].isin(show_topics)]
 topic_sankey = hv.Sankey(CREDS_concept_vis, kdims=["au_name", "concept_name"], vdims=["paper_id"])

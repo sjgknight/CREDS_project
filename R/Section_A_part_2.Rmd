@@ -211,8 +211,10 @@ CREDS_cite['num_member_cite'] = CREDS_cite.groupby(by=['id', 'display_name'])['a
 CREDS_cite = CREDS_cite.groupby(by=['id', 'display_name', 'au_id', 'au_name']).agg({'paper_id': pd.Series.nunique, 'total_num_paper_cite': 'mean', 'num_member_cite': 'mean'}).reset_index()
 CREDS_cite.set_index(['id', 'display_name'], inplace=True)
 CREDS_cite = CREDS_cite.sort_values(['num_member_cite', 'total_num_paper_cite'], ascending=[False, False])
-pd.set_option('max_row', None)
-CREDS_cite
+
+with pd.option_context('display.max_rows', 250):
+    display(CREDS_cite)
+#CREDS_cite
 ```
 
 ```{python}
@@ -273,9 +275,16 @@ cited_author.set_index(['id', 'display_name'], inplace=True)
 # sort and save the results
 cited_author = cited_author.sort_values(['num_member_cite', 'total_num_paper_cite'], ascending=[False, False])
 cited_author.to_excel('output/commonly_cited_authors.xlsx')
+```
 
-# show the top 50 rows
-cited_author[:50]
+```{python}
+# show the top x rows (min_rows sets the minimum number to display...this seems very roundabout)
+show_me = 800
+
+with pd.option_context('display.min_rows', show_me,'display.expand_frame_repr', show_me, 'display.max_rows', show_me):
+    display(cited_author.head(show_me))
+
+#cited_author[:50]
 ```
 
 ```{python}
@@ -334,17 +343,34 @@ cited_concept = cited_concept.groupby(by=[
     'au_id', 
     'au_name',
 #     'wikidata',
-#     'level'
+     'level'
 ]).agg({'paper_id': pd.Series.nunique, 'total_num_paper_cite': 'mean', 'num_member_cite': 'mean'}).reset_index()
 
 # set index for better visual effects
 cited_concept.set_index(['id', 'display_name'], inplace=True)
 
 # sort and save the results
-cited_concept = cited_concept.sort_values(['num_member_cite', 'total_num_paper_cite'], ascending=[False, False])
+cited_concept = cited_concept.sort_values(['num_member_cite', 'total_num_paper_cite', 'level'], ascending=[False, False, False])
 cited_concept.to_excel('output/commonly_cited_topics.xlsx')
 
 # show the top 50 rows
 cited_concept[:50]
+```
+
+```{python}
+# sort and save the results
+# Can filter levels here.  The upper levels (0,1) are less useful, although a lot of the lower levels >1 are also wrong. It's probably possible to filter out many of these manually. 
+cited_concept2 = cited_concept.loc[cited_concept['level'] > 2.0]
+
+cited_concept2 = cited_concept2.sort_values(['num_member_cite', 'total_num_paper_cite', 'level'], ascending=[False, False, False])
+
+# show the top 50 rows
+cited_concept2[:50]
+
+
+show_me = 400
+
+with pd.option_context('display.min_rows', show_me,'display.expand_frame_repr', show_me, 'display.max_rows', show_me):
+    display(cited_concept2.head(show_me))
 ```
 

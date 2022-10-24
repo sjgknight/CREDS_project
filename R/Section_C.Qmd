@@ -146,6 +146,8 @@ identified_paths
 
 ## Visualise the main paths in the citation network
 
+Visualises paths through the citation network, where each node represents a paper, and each edge a citation, and the sequence n the influence pathway. (And size = n of citations to papers). 
+
 ```{python}
 # Node size denotes the citation counts
 
