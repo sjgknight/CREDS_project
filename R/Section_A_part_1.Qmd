@@ -1,0 +1,271 @@
+---
+title: An R Markdown document converted from "Section_A_part_1.ipynb"
+output: html_document
+---
+
+## Section A_1. Bibliometric insights from CREDS research outputs
+```{r}
+pacman::p_load(reticulate, dplyr, magrittr)
+use_condaenv("r-reticulate")
+
+```
+
+
+```{python}
+# import the libraries needed
+import pandas as pd
+import pyreadr
+from tqdm import tqdm
+from collections import Counter
+import networkx as nx
+import holoviews as hv
+from holoviews import opts, dim
+import requests
+from collections import defaultdict
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+import hvplot.pandas
+import hvplot.networkx as hvnx
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+
+hv.extension('bokeh')
+```
+
+### A1. Basic data cleansing, author id and name disambiguation
+
+```{python}
+# Read data inputs and load the existing curated data for CREDS members
+dfs = {
+    field: pyreadr.read_r(f'data/{field}.RDS')[None] 
+    for field in 
+    ['members','main_data','author','TCperYear','CR','related_works','concept', 'ref_author', 'ref_concept']
+}
+
+# add Mary's publications
+
+response = requests.get('https://api.openalex.org/authors?filter=display_name.search:Mary%20Coupland')
+
+mary_ids = [author['id'] for author in response.json()['results']]
+mary_ids = '|'.join(mary_ids)
+response = requests.get(f'https://api.openalex.org/works?filter=author.id:{mary_ids}')
+
+df_main, df_author, df_tc_per_year, df_cr, df_rw, df_concept = [], [], [], [], [], []
+for line in response.json()['results']:
+    df_main.append(
+        {
+            'id': line['id'],
+            'TI': line['title'],
+            'PY': line['publication_year'],
+            'SO': line['host_venue']['display_name'],
+            'SO_ID': line['host_venue']['id'],
+            'TC': line['cited_by_count'],
+        }
+    )
+    for author in line['authorships']:
+        df_author.append(
+            {
+                'au_id': author['author']['id'],
+                'au_name': author['author']['display_name'],
+                'au_orcid': author['author']['orcid'],
+                'au_position': author['author_position'],
+                'au_affiliation_raw': author['raw_affiliation_string'],
+                'institution_id': author['institutions'][0]['id'] if author['institutions'] else None,
+                'institution_name':  author['institutions'][0]['display_name'] if author['institutions'] else None,
+                'institution_ror': author['institutions'][0]['ror'] if author['institutions'] else None,
+                'institution_country': author['institutions'][0]['country_code'] if author['institutions'] else None,
+                'institution_type': author['institutions'][0]['type'] if author['institutions'] else None,
+                'paper_id': line['id'],
+            }
+        )
+    for tc in line['counts_by_year']:
+        df_tc_per_year.append(
+            {
+                'year': tc['year'], 
+                'TC': tc['cited_by_count'],
+                'paper_id': line['id']
+            }
+        )
+    for cr in line['referenced_works']:
+        df_cr.append(
+            {
+                'CR': cr,
+                'paper_id': line['id']
+            }
+        )
+    for rw in line['related_works']:
+        df_rw.append(
+            {
+                'related_works': rw,
+                'paper_id': line['id']
+            }
+        )
+    for concept in line['concepts']:
+        df_concept.append(
+            {
+                'concept_id': concept['id'],
+                'concept_name': concept['display_name'],
+                'concept_score': concept['score'],
+                'concept_lecel': concept['level'],
+                'concept_url': concept['wikidata'],
+                'paper_id': line['id']
+            }
+        )
+        
+dfs['main_data'] = dfs['main_data'].append(pd.DataFrame.from_dict(df_main)).drop_duplicates()
+dfs['author'] = dfs['author'].append(pd.DataFrame.from_dict(df_author)).drop_duplicates()
+dfs['TCperYear'] = dfs['TCperYear'].append(pd.DataFrame.from_dict(df_tc_per_year)).drop_duplicates()
+dfs['CR'] = dfs['CR'].append(pd.DataFrame.from_dict(df_cr)).drop_duplicates()
+dfs['related_works'] = dfs['related_works'].append(pd.DataFrame.from_dict(df_rw)).drop_duplicates()
+dfs['concept'] = dfs['concept'].append(pd.DataFrame.from_dict(df_concept)).drop_duplicates()
+
+valid_names = list(dfs['members']['FirstName'] + ' ' + dfs['members']['LastName'])
+
+# manually add all possible appeared names to the valid name list
+valid_names.append('Dilek Cetindamar')
+valid_names.append('Sandy Schuck')
+
+# unify the identified author name
+dfs['author'].loc[dfs['author']['au_name'] == 'S. J. Buckingham Shum', 'au_id'] = "https://openalex.org/A2123583348"
+dfs['author'].loc[dfs['author']['au_name'] == 'S. J. Buckingham Shum', 'au_name'] = "Simon Buckingham Shum"
+dfs['author'].loc[dfs['author']['au_name'] == 'Simon Buckingham Shum', 'au_id'] = "https://openalex.org/A2123583348"
+dfs['author'].loc[dfs['author']['au_name'] == 'Bhuva Narayan', 'au_id'] = "https://openalex.org/A2163324054"
+dfs['author'].loc[dfs['author']['au_name'] == 'Mary Coupland', 'au_id'] = "https://openalex.org/A2495552202"
+dfs['author'].loc[dfs['author']['au_name'] == 'Sandy Schuck', 'au_id'] = "https://openalex.org/A1975317455"
+dfs['author'].loc[dfs['author']['au_name'] == 'Sandy Schuck', 'au_name'] = "Sandra Schuck"
+dfs['author'].loc[dfs['author']['au_name'] == 'Sandra Schuck', 'au_id'] = "https://openalex.org/A1975317455"
+dfs['author'].loc[dfs['author']['au_name'] == 'Anne Prescott', 'au_id'] = "https://openalex.org/A2505888288"
+dfs['author'].loc[dfs['author']['au_name'] == 'Marco Angelini', 'au_id'] = "https://openalex.org/A4220214751"
+
+
+# the collection of CREDS member ids
+CREDS_au_ids = set(dfs['author'].loc[dfs['author']['au_name'].isin(valid_names)]['au_id'])
+
+# filter by id, group by name and sort by publication counts
+dfs['author'].loc[dfs['author']['au_id'].isin(CREDS_au_ids)].groupby(['au_id', 'au_name']).size().reset_index(name='publication_count').sort_values('publication_count', ascending=False)
+```
+
+```{python}
+# Filter by recent ten years
+
+paper_ids = set(dfs['main_data'].loc[dfs['main_data']['PY'] >= 2012]['id'])
+dfs['main_data'] = dfs['main_data'].loc[dfs['main_data']['id'].isin(paper_ids)]
+
+for key, value in dfs.items():
+    if key not in ['main_data', 'members', 'ref_author', 'ref_concept']:
+        dfs[key] = dfs[key].loc[dfs[key]['paper_id'].isin(paper_ids)]
+```
+
+### A2. CREDS members author-topic Sankey diagram
+
+```{python}
+# visualise the author-topic sankey diagram, see the reserach foci of CREDS members
+
+# join the dataframes of data and concept, inner join means that only authors have written concepts will be included
+au_join_concept = pd.merge(dfs['author'], dfs['concept'], how='inner', left_on='paper_id', right_on='paper_id')
+
+# group by author and concept, generate author-concept matrix (sparse format)
+au_concept_group = au_join_concept.groupby(by=['au_id', 'concept_id', 'au_name', 'concept_name']).agg({'paper_id': pd.Series.nunique}).reset_index().sort_values('paper_id')
+
+# filter by author and concepts
+NUM_TOPICS = 20  # Number of topic to show
+show_topics = [a[0] for a in Counter(list(au_concept_group['concept_name'])).most_common(NUM_TOPICS)]
+au_concept_group = au_concept_group.loc[au_concept_group['au_id'].isin(CREDS_au_ids)]
+
+# filter df to do visualisation
+CREDS_concept_vis = au_concept_group.loc[au_concept_group['concept_name'].isin(show_topics)]
+topic_sankey = hv.Sankey(CREDS_concept_vis, kdims=["au_name", "concept_name"], vdims=["paper_id"])
+
+# generate a Sankey diagram and configure its appearance
+topic_sankey.opts(
+    cmap="Spectral_r",
+    label_position='outer',
+    edge_color='au_name', edge_line_width=0.1,
+    node_alpha=1.0, 
+    node_width=50, 
+    node_sort=False, 
+    bgcolor="white",
+    title=f"Figure 1. What are top {NUM_TOPICS} reserach topics of CREDS members?"
+)
+
+# show the Sankey diagram
+topic_sankey.opts(width=1200, height=800)
+```
+
+### A3. CREDS members author-topic & correlation heatmaps
+
+```{python}
+# generate the heatmap for author-concept matrix
+heatmap1 = hv.HeatMap(
+    CREDS_concept_vis, 
+    kdims=["au_name", "concept_name"], 
+    vdims=["paper_id"]
+).sort().aggregate(function=np.sum)
+
+heatmap1.opts(
+    opts.HeatMap(tools=['hover'], 
+    colorbar=True, 
+     height=500, 
+     width=600, 
+     toolbar='above', 
+     clim=(0, 100), 
+     xrotation=45, 
+     cmap='Greens', 
+     title='Figure 2. CREDS members author-topic matrix')
+)
+
+# generate the heatmap for author-author reserach concept similarity matrix
+
+author_concept_matrix = au_concept_group[['concept_name', 'au_name', 'paper_id']].pivot_table(index="au_name", columns="concept_name", values='paper_id').fillna(0)
+similarity_matrix = pd.DataFrame(cosine_similarity(author_concept_matrix), index=author_concept_matrix.index, columns=author_concept_matrix.index)
+heatmap2 = hv.HeatMap(
+    [(i, j, similarity_matrix.loc[i][j], i + ': ' + ', '.join(CREDS_concept_vis.loc[CREDS_concept_vis['au_name'] == i]['concept_name']), j + ': ' + ', '.join(CREDS_concept_vis.loc[CREDS_concept_vis['au_name'] == j]['concept_name'])) for i in similarity_matrix.index for j in similarity_matrix.index[::-1]] , vdims=['similarity', 'concepts_X', 'concepts_Y']
+)
+heatmap2.opts(
+opts.HeatMap(
+    tools=['hover'], 
+    colorbar=True, 
+    height=500, width=550, 
+    toolbar='above', 
+    clim=(0, 1), 
+    xrotation=45,
+    cmap="Greens", 
+    title='Figure 3. CREDS members correlation matrix')
+)
+
+heatmap1 + heatmap2
+
+# heatmap 2 top concepts
+```
+
+### A4. TSNE visualisation for CREDS members
+Figure 4 shows the position of each CREDS member in a scatter plot based on their research interests (concepts). The closer the two members are in the figure, the similar researcher interests they share.
+
+```{python}
+# Visualise CREDS members' research interests in a 2-D plot
+author_paper = dfs['author'].groupby(by=['au_name']).agg({'paper_id': pd.Series.nunique}).rename(columns={'paper_id': 'paper_count'})
+X_embedded = TSNE(n_components=2,  init='random', perplexity=3, random_state=8).fit_transform(author_concept_matrix)
+X_embedded = pd.DataFrame(X_embedded, index=author_concept_matrix.index, columns = ['x', 'y'])
+X_embedded = pd.merge(X_embedded, author_paper, how='left', left_on = 'au_name', right_on='au_name').reset_index()
+
+from plotly.offline import iplot
+import plotly.express as px
+fig = px.scatter(X_embedded, x='x', y='y', color='paper_count', size='paper_count', text='au_name', width=800, height=800, title='Figure 4. TSNE visualisation of CREDS members based on their research interests')
+fig.update_traces(textposition="middle right")
+# fig.update_xaxes(range=[-300, 600])
+
+iplot(fig)
+```
+
+### A5. CREDS reserach concept vector
+
+The code below generates a average concept vector for CREDS reserach interests.
+
+```{python}
+# Show the averge concept vector for CREDS memebers
+CREDS_vector = (dfs['concept'].groupby(by=['concept_id', 'concept_name']).agg({'paper_id': pd.Series.nunique}) / len(set(dfs['concept']['paper_id']))).sort_values(by='paper_id', ascending=False)
+
+# top 100 concepts
+CREDS_vector[:50]
+```
+

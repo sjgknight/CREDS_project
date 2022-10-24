@@ -1,0 +1,58 @@
+---
+title: "lazy_setup2"
+format: html
+editor: source
+---
+
+## Setup
+
+Install and load packages for R and Python
+```{r setup}
+pacman::p_load("reticulate")
+pacman::p_load("quarto")
+
+#%conda install holoviews hvplot networkx numpy pandas requests tqdm IPython jupyter_client jupyter_core notebook jupyterlab
+
+reqs <- readLines("requirements.txt")
+reqs <- reqs[c(1:8,11:17)]
+
+py_install(reqs, envname = "r-reticulate", method = "conda")
+
+py_install("sklearn", envname = "r-reticulate", pip=TRUE)
+
+py_install("session_info", envname = "r-reticulate", pip=T)
+
+
+```
+
+## Convert ipynb to Qmd
+
+```{r convert}
+#convert_ipynb(input, output = xfun::with_ext(input, "Rmd"))
+#lapply(nb, function(x) {sys::exec_wait("quarto.cmd", paste0("convert ",x))})
+
+#in terminal line of form following works
+# $ quarto.cmd convert 'Section_A_part_2.ipynb'
+
+#reticulate::repl_python()
+
+#input <- "Section_A_part_1.ipynb"
+
+nb <- list.files(here::here(),"*.ipynb")
+
+lapply(nb, function(input) {
+  rmarkdown::convert_ipynb(input, output = xfun::with_ext(paste0("R/",input), "Rmd"))
+})
+
+
+#if you wanted to convert rmd to qmd
+
+lapply(nb, function(input) {
+  knitr::convert_chunk_header(input = xfun::with_ext(paste0("R/",input), "Rmd"), output = xfun::with_ext(paste0("R/",input), "Qmd") )
+})
+
+
+
+
+```
+

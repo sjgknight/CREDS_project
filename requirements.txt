@@ -14,3 +14,4 @@ jupyter_client==7.3.0
 jupyter_core==4.10.0
 jupyterlab==3.0.14
 notebook==6.0.3
+python-louvain

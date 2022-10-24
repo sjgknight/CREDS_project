@@ -1,0 +1,350 @@
+---
+title: An R Markdown document converted from "Section_A_part_2.ipynb"
+output: html_document
+---
+
+## Section A_2. Bibliometric insights from CREDS research outputs
+
+```{python}
+# import the libraries needed
+import pandas as pd
+import pyreadr
+from tqdm import tqdm
+from collections import Counter
+import networkx as nx
+import holoviews as hv
+from holoviews import opts, dim
+import requests
+from collections import defaultdict
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+import hvplot.pandas
+import hvplot.networkx as hvnx
+import numpy as np
+from sklearn.manifold import TSNE
+import holoviews as hv
+import matplotlib.pyplot as plt
+
+hv.extension('bokeh')
+```
+
+### A1. Basic data cleansing, author id and name disambiguation
+
+```{python}
+# Read data inputs and load the existing curated data for CREDS members
+dfs = {
+    field: pyreadr.read_r(f'data/{field}.RDS')[None] 
+    for field in 
+    ['members','main_data','author','TCperYear','CR','related_works','concept', 'ref_author', 'ref_concept']
+}
+
+# add Mary's publications
+
+response = requests.get('https://api.openalex.org/authors?filter=display_name.search:Mary%20Coupland')
+
+mary_ids = [author['id'] for author in response.json()['results']]
+mary_ids = '|'.join(mary_ids)
+response = requests.get(f'https://api.openalex.org/works?filter=author.id:{mary_ids}')
+
+df_main, df_author, df_tc_per_year, df_cr, df_rw, df_concept = [], [], [], [], [], []
+for line in response.json()['results']:
+    df_main.append(
+        {
+            'id': line['id'],
+            'TI': line['title'],
+            'PY': line['publication_year'],
+            'SO': line['host_venue']['display_name'],
+            'SO_ID': line['host_venue']['id'],
+            'TC': line['cited_by_count'],
+        }
+    )
+    for author in line['authorships']:
+        df_author.append(
+            {
+                'au_id': author['author']['id'],
+                'au_name': author['author']['display_name'],
+                'au_orcid': author['author']['orcid'],
+                'au_position': author['author_position'],
+                'au_affiliation_raw': author['raw_affiliation_string'],
+                'institution_id': author['institutions'][0]['id'] if author['institutions'] else None,
+                'institution_name':  author['institutions'][0]['display_name'] if author['institutions'] else None,
+                'institution_ror': author['institutions'][0]['ror'] if author['institutions'] else None,
+                'institution_country': author['institutions'][0]['country_code'] if author['institutions'] else None,
+                'institution_type': author['institutions'][0]['type'] if author['institutions'] else None,
+                'paper_id': line['id'],
+            }
+        )
+    for tc in line['counts_by_year']:
+        df_tc_per_year.append(
+            {
+                'year': tc['year'], 
+                'TC': tc['cited_by_count'],
+                'paper_id': line['id']
+            }
+        )
+    for cr in line['referenced_works']:
+        df_cr.append(
+            {
+                'CR': cr,
+                'paper_id': line['id']
+            }
+        )
+    for rw in line['related_works']:
+        df_rw.append(
+            {
+                'related_works': rw,
+                'paper_id': line['id']
+            }
+        )
+    for concept in line['concepts']:
+        df_concept.append(
+            {
+                'concept_id': concept['id'],
+                'concept_name': concept['display_name'],
+                'concept_score': concept['score'],
+                'concept_lecel': concept['level'],
+                'concept_url': concept['wikidata'],
+                'paper_id': line['id']
+            }
+        )
+        
+dfs['main_data'] = dfs['main_data'].append(pd.DataFrame.from_dict(df_main)).drop_duplicates()
+dfs['author'] = dfs['author'].append(pd.DataFrame.from_dict(df_author)).drop_duplicates()
+dfs['TCperYear'] = dfs['TCperYear'].append(pd.DataFrame.from_dict(df_tc_per_year)).drop_duplicates()
+dfs['CR'] = dfs['CR'].append(pd.DataFrame.from_dict(df_cr)).drop_duplicates()
+dfs['related_works'] = dfs['related_works'].append(pd.DataFrame.from_dict(df_rw)).drop_duplicates()
+dfs['concept'] = dfs['concept'].append(pd.DataFrame.from_dict(df_concept)).drop_duplicates()
+
+valid_names = list(dfs['members']['FirstName'] + ' ' + dfs['members']['LastName'])
+
+# manually add all possible appeared names to the valid name list
+valid_names.append('Dilek Cetindamar')
+valid_names.append('Sandy Schuck')
+
+# unify the identified author name
+dfs['author'].loc[dfs['author']['au_name'] == 'S. J. Buckingham Shum', 'au_id'] = "https://openalex.org/A2123583348"
+dfs['author'].loc[dfs['author']['au_name'] == 'S. J. Buckingham Shum', 'au_name'] = "Simon Buckingham Shum"
+dfs['author'].loc[dfs['author']['au_name'] == 'Simon Buckingham Shum', 'au_id'] = "https://openalex.org/A2123583348"
+dfs['author'].loc[dfs['author']['au_name'] == 'Bhuva Narayan', 'au_id'] = "https://openalex.org/A2163324054"
+dfs['author'].loc[dfs['author']['au_name'] == 'Mary Coupland', 'au_id'] = "https://openalex.org/A2495552202"
+dfs['author'].loc[dfs['author']['au_name'] == 'Sandy Schuck', 'au_id'] = "https://openalex.org/A1975317455"
+dfs['author'].loc[dfs['author']['au_name'] == 'Sandy Schuck', 'au_name'] = "Sandra Schuck"
+dfs['author'].loc[dfs['author']['au_name'] == 'Sandra Schuck', 'au_id'] = "https://openalex.org/A1975317455"
+dfs['author'].loc[dfs['author']['au_name'] == 'Anne Prescott', 'au_id'] = "https://openalex.org/A2505888288"
+dfs['author'].loc[dfs['author']['au_name'] == 'Marco Angelini', 'au_id'] = "https://openalex.org/A4220214751"
+
+# the collection of CREDS member ids
+CREDS_au_ids = set(dfs['author'].loc[dfs['author']['au_name'].isin(valid_names)]['au_id'])
+
+# filter by id, group by name and sort by publication counts
+dfs['author'].loc[dfs['author']['au_id'].isin(CREDS_au_ids)].groupby(['au_id', 'au_name']).size().reset_index(name='publication_count').sort_values('publication_count', ascending=False)
+```
+
+```{python}
+# Filter by recent ten years
+
+paper_ids = set(dfs['main_data'].loc[dfs['main_data']['PY'] >= 2012]['id'])
+dfs['main_data'] = dfs['main_data'].loc[dfs['main_data']['id'].isin(paper_ids)]
+
+for key, value in dfs.items():
+    if key not in ['main_data', 'members', 'ref_author', 'ref_concept']:
+        dfs[key] = dfs[key].loc[dfs[key]['paper_id'].isin(paper_ids)]
+```
+
+### A6. Retrieve citation data for CREDS members
+
+### <span style="color:red"> (DONT rerun this block if you download the data folder already, rerunning it may take 10mins+)</span>
+
+### <span style="color:red">This code is left here for future work flow use.</span>
+
+```{python}
+# # Retrieve the author and concept information for references, get the meta information from OpenAlex API.
+
+# work_topics = []
+# work_authors = []
+# for u in tqdm(set(dfs['CR']['paper_id'])):
+#     response = requests.get(f'https://api.openalex.org/works?filter=cited_by:{u}&per-page=200')
+#     work_count = response.json()['meta']['count']
+#     for paper in response.json()['results']:
+#         for concept in paper['concepts']:
+#             concept.update({'ref_id': paper['id']})
+#             work_topics.append(concept)
+#         for author in paper['authorships']:
+#             author['author'].update({'ref_id': paper['id']})
+#             work_authors.append(author['author'])
+#     if work_count > 200:
+#         for page in range(2, int(work_count/200) + 2):
+#             response = requests.get(f'https://api.openalex.org/works?filter=author.id:{u}&per-page=200&page={page}')
+#             for paper in response.json()['results']:
+#                 for concept in paper['concepts']:
+#                     concept.update({'ref_id': paper['id']})
+#                     work_topics.append(concept)
+#                 for author in paper['authorships']:
+#                     author['author'].update({'ref_id': paper['id']})
+#                     work_authors.append(author['author'])
+# dfs['ref_concept'] = pd.DataFrame(work_topics).drop_duplicates()
+# dfs['ref_author'] = pd.DataFrame(work_authors).drop_duplicates()
+# pyreadr.write_rds('data/ref_author.RDS', dfs['ref_author'])
+# pyreadr.write_rds('data/ref_concept.RDS', dfs['ref_concept'])
+```
+
+### A7. How do CREDS members cite each other?
+
+```{python}
+dfs['ref_author'].loc[dfs['ref_author']['display_name'] == 'Sandy Schuck', 'id'] = "https://openalex.org/A1975317455"
+dfs['ref_author'].loc[dfs['ref_author']['display_name'] == 'Sandy Schuck', 'display_name'] = "Sandra Schuck"
+dfs['ref_author'].loc[dfs['ref_author']['display_name'] == 'Sandra Schuck', 'id'] = "https://openalex.org/A1975317455"
+dfs['ref_author'].loc[dfs['ref_author']['display_name'] == 'Dilek Cetindamar Kozanoglu', 'display_name'] = "Dilek Cetindamar"
+
+# join the reference table, reference author table and CREDS member author table
+CREDS_cite = pd.merge(dfs['ref_author'], dfs['CR'], how='inner', left_on='ref_id', right_on='CR')
+CREDS_cite = pd.merge(CREDS_cite, dfs['author'], how='inner', left_on='paper_id', right_on='paper_id')
+
+# focus only on inner citations of CREDS members
+CREDS_cite = CREDS_cite.loc[(CREDS_cite['au_id'].isin(CREDS_au_ids)) & (CREDS_cite['id'].isin(CREDS_au_ids)) & (CREDS_cite['au_id'] != CREDS_cite['id'])]
+
+# Group and calculate the number of papers cite an author, and how many CREDS members cite the author
+CREDS_cite['total_num_paper_cite'] = CREDS_cite.groupby(by=['id', 'display_name'])['paper_id'].transform(pd.Series.nunique)
+CREDS_cite['num_member_cite'] = CREDS_cite.groupby(by=['id', 'display_name'])['au_name'].transform(pd.Series.nunique)
+
+# Group and show
+CREDS_cite = CREDS_cite.groupby(by=['id', 'display_name', 'au_id', 'au_name']).agg({'paper_id': pd.Series.nunique, 'total_num_paper_cite': 'mean', 'num_member_cite': 'mean'}).reset_index()
+CREDS_cite.set_index(['id', 'display_name'], inplace=True)
+CREDS_cite = CREDS_cite.sort_values(['num_member_cite', 'total_num_paper_cite'], ascending=[False, False])
+pd.set_option('max_row', None)
+CREDS_cite
+```
+
+```{python}
+CREDS_cite = CREDS_cite.reset_index()
+
+self_citation_graph = nx.DiGraph()
+self_citation_graph.add_weighted_edges_from([(A[0],A[1],A[2]) for i, A in CREDS_cite[['au_name', 'display_name', 'paper_id']].iterrows()])
+self_citation_graph.edges.data()
+plt.figure(3,figsize=(12,12)) 
+
+pos = nx.kamada_kawai_layout(self_citation_graph)
+
+
+nx.draw_networkx_nodes(
+    self_citation_graph, 
+    pos,
+    node_size = [self_citation_graph.in_degree(u)*100 + 10 for u in self_citation_graph.nodes],
+    label=True,
+    node_color="skyblue",
+    node_shape="s", 
+    alpha=0.5, 
+    linewidths=10,
+)
+nx.draw_networkx_edges(
+    self_citation_graph, pos,
+    connectionstyle="arc3,rad=0.1"  # <-- THIS IS IT
+)
+
+nx.draw_networkx_labels(self_citation_graph, pos)
+
+nx.info(self_citation_graph)
+```
+
+```{python}
+print(set(dfs['author'].loc[dfs['author']['au_id'].isin(CREDS_au_ids)]['au_name']).difference(set(self_citation_graph.nodes)))
+```
+
+### A8. Who do CREDS members commonly cite the most?
+
+```{python}
+# who are cited most by CREDS members?
+cited_author = pd.merge(dfs['ref_author'], dfs['CR'], how='inner', left_on='ref_id', right_on='CR')
+cited_author = pd.merge(cited_author, dfs['author'], how='inner', left_on='paper_id', right_on='paper_id')
+
+# remove self-citations, comment out this line if keep the self-citations
+cited_author = cited_author.loc[(cited_author['au_id'].isin(CREDS_au_ids)) & (~cited_author['id'].isin(CREDS_au_ids))]
+
+# Count the numbers of cited members and cited papers
+cited_author['total_num_paper_cite'] = cited_author.groupby(by=['id', 'display_name'])['paper_id'].transform(pd.Series.nunique)
+cited_author['num_member_cite'] = cited_author.groupby(by=['id', 'display_name'])['au_name'].transform(pd.Series.nunique)
+
+# Group and show results
+cited_author = cited_author.groupby(by=['id', 'display_name', 'au_id', 'au_name']).agg({'paper_id': pd.Series.nunique, 'total_num_paper_cite': 'mean', 'num_member_cite': 'mean'}).reset_index()
+
+# set index for better visual effects
+cited_author.set_index(['id', 'display_name'], inplace=True)
+
+# sort and save the results
+cited_author = cited_author.sort_values(['num_member_cite', 'total_num_paper_cite'], ascending=[False, False])
+cited_author.to_excel('output/commonly_cited_authors.xlsx')
+
+# show the top 50 rows
+cited_author[:50]
+```
+
+```{python}
+cited_author = cited_author.reset_index()
+
+coupling_graph = nx.DiGraph()
+coupling_graph.add_weighted_edges_from([(A[0],A[1],A[2]) for i, A in cited_author[['au_name', 'display_name', 'paper_id']].iterrows() if A[0] != A[1]])
+plt.figure(3,figsize=(20, 20))
+
+# k-shell and centrality analysis
+core_cited = nx.k_shell(coupling_graph)
+show_nodes = set(list(core_cited.nodes) + valid_names)
+core_cited = nx.subgraph(coupling_graph, show_nodes)
+
+print([u for u in core_cited.nodes if u in valid_names])
+
+pos = nx.spring_layout(core_cited)
+
+
+nx.draw_networkx_nodes(
+    core_cited, 
+    pos,
+    node_size = [core_cited.in_degree(u)*100 + 10 for u in core_cited.nodes],
+    label=True,
+    node_color=["skyblue" if u in valid_names else "red" for u in core_cited.nodes],
+    node_shape="s", 
+    alpha=0.5, 
+    linewidths=10,
+)
+nx.draw_networkx_edges(
+    core_cited, pos,
+    connectionstyle="arc3,rad=0.1",
+)
+nx.draw_networkx_labels(core_cited, pos)
+nx.info(core_cited)
+```
+
+### A9. What concepts are cited most by CREDS members?
+
+```{python}
+# what concepts are cited the most by CREDS members?
+cited_concept = pd.merge(dfs['ref_concept'], dfs['CR'], how='inner', left_on='ref_id', right_on='CR')
+cited_concept = pd.merge(cited_concept, dfs['author'], how='inner', left_on='paper_id', right_on='paper_id')
+
+# remove self-citations, comment out this line if keep the self-citations
+cited_concept = cited_concept.loc[(cited_concept['au_id'].isin(CREDS_au_ids))]
+
+# Count the numbers of cited members and cited papers
+cited_concept['total_num_paper_cite'] = cited_concept.groupby(by=['id', 'display_name'])['paper_id'].transform(pd.Series.nunique)
+cited_concept['num_member_cite'] = cited_concept.groupby(by=['id', 'display_name'])['au_name'].transform(pd.Series.nunique)
+
+# # Group the table, you can keep wikidata and level columns if you comment out those lines
+cited_concept = cited_concept.groupby(by=[
+    'id',                                 
+    'display_name', 
+    'au_id', 
+    'au_name',
+#     'wikidata',
+#     'level'
+]).agg({'paper_id': pd.Series.nunique, 'total_num_paper_cite': 'mean', 'num_member_cite': 'mean'}).reset_index()
+
+# set index for better visual effects
+cited_concept.set_index(['id', 'display_name'], inplace=True)
+
+# sort and save the results
+cited_concept = cited_concept.sort_values(['num_member_cite', 'total_num_paper_cite'], ascending=[False, False])
+cited_concept.to_excel('output/commonly_cited_topics.xlsx')
+
+# show the top 50 rows
+cited_concept[:50]
+```
+

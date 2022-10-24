@@ -1,0 +1,178 @@
+---
+title: An R Markdown document converted from "Section_C.ipynb"
+output: html_document
+---
+
+```{python}
+import requests
+from tqdm import tqdm
+import json
+import networkx as nx
+import hvplot.networkx as hvnx
+import networkx as nx
+import holoviews as hv
+from community import best_partition
+from collections import defaultdict
+```
+
+## Get article DOIs from the Zotero API
+
+```{python}
+# The limit for Zotero API is 100 and we will use batch retrieval if the number exceeds 100
+
+
+# extract the doi information from both the 'doi' field and 'extra' field
+def get_doi(item):
+    doi = ""
+    doi = item['data'].get('DOI', "")
+    if doi:
+        return doi
+    elif item['data'].get('extra', ""):
+        for line in item['data'].get('extra', "").split('\n'):
+            if line.lower().startswith('doi'):
+                return line.split(":")[1].strip(" ")
+    return doi
+    
+    
+dois = []
+for i in tqdm(range(int(20))):
+    response = requests.get(f'https://api.zotero.org/groups/4120530/collections/YP9YI9B7/items?limit=100&start={i*100}')
+    for item in response.json():
+        if get_doi(item):
+            dois.append(get_doi(item))
+```
+
+## Get atricle metadata from OpenAlex
+
+```{python}
+# Get the metadata of Zotero papers and save it
+doi = list(set(dois))
+
+f = open('data/Zotero_dois.txt', 'w+', encoding='UTF-8')
+for i in range(int(len(dois)/50) + 1):
+    batch_id_string = '|'.join(dois[i*50:i*50 + 50])
+    response = requests.get(f'https://api.openalex.org/works?filter=doi:{batch_id_string}&per_page=200')
+    for paper in tqdm(response.json()['results']):
+        f.write(json.dumps(paper) + '\n')
+```
+
+```{python}
+# Build a citation network
+
+G = nx.DiGraph()
+paper_ids = defaultdict(lambda: {})
+with open('data/Zotero_dois.txt', 'r', encoding='UTF-8') as f:
+    for line in tqdm(f):
+        line = json.loads(line)
+        paper_ids['title'][line['id']] = line['title']
+        paper_ids['year'][line['id']] = line['publication_year']
+        paper_ids['authors'][line['id']] = ', '.join([a['author']['display_name'] for a in line['authorships'][:3]]) + (', et al.' if len(line['authorships']) > 3 else '')
+        G.add_edges_from([(line['id'], x) for x in  line['referenced_works']])
+G = G.subgraph(paper_ids['title'].keys())
+nx.set_node_attributes(G, paper_ids['title'], 'title')
+nx.set_node_attributes(G, paper_ids['year'], 'publication_year')
+nx.set_node_attributes(G, paper_ids['authors'], 'authors')
+nx.set_node_attributes(G, best_partition(nx.Graph(G)), 'community')
+nx.info(G)
+```
+
+```{python}
+nx.to_pandas_edgelist(G)
+```
+
+```{python}
+# Visualise the citation network
+
+hvnx.draw(
+    G, 
+    height=600, 
+    width=600, 
+    random_seed=10, 
+    node_size=[G.in_degree(u)*5 for u in G.nodes], 
+    node_color=[G.nodes[u]['community'] for u in G.nodes], 
+    arrowsize=200, 
+    cmap='spectral', 
+    edge_width=0.2, 
+    arrowstyle='-|>', 
+    arrowhead_length=0.01
+)
+```
+
+## Find the main paths in the citation network
+
+```{python}
+# Find the important paths based on main path analysis (https://en.wikipedia.org/wiki/Main_path_analysis)
+from collections import defaultdict
+from nltk import ngrams
+
+def main_path(graph: nx.DiGraph, key_paper=None):
+    
+    # calculate the traversal counts of each edge
+    source_nodes = set([u for u in graph.nodes if graph.in_degree(u) == 0])
+    sink_nodes = set([u for u in graph.nodes if graph.out_degree(u) == 0])
+    traversal_counts = defaultdict(lambda: 0)
+    possible_routes = []
+    for source in tqdm(source_nodes):
+        for target in sink_nodes:
+            n_paths = list(nx.all_simple_paths(graph, source, target))
+            if n_paths:
+                possible_routes += n_paths
+            for n_path in n_paths:
+                for edge in list(ngrams(n_path, 2)):
+                    traversal_counts[edge] += 1
+
+    # If the key paper is specified, this algorithm will return
+    if key_paper:
+        possible_routes = [route for route in possible_routes if key_paper in route]
+        key_paths = sorted(possible_routes,
+                           key=lambda x: sum(traversal_counts[edge] for edge in list(ngrams(x, 2))),
+                           reverse=True)[: 5]
+        return key_paths
+
+    # If no key paper specified, return the top 5 global main paths with the largest traversal counts
+    # The paths will be sorted by two keys: traversal_counts sum, out degree sum
+    global_main_paths = sorted(possible_routes,
+                               key=lambda x: (
+                                   sum(traversal_counts[edge] for edge in list(ngrams(x, 2))),
+                                   sum(graph.in_degree(u) for u in x)
+                               ),
+                               reverse=True)[:5]
+
+    return global_main_paths
+
+identified_paths = main_path(G)
+identified_paths
+```
+
+## Visualise the main paths in the citation network
+
+```{python}
+# Node size denotes the citation counts
+
+plots = []
+for nodes in identified_paths:
+    sub_g = G.subgraph(nodes)
+    node_dic = {i+1: u for i, u in enumerate(nodes)}
+    
+    nx.set_node_attributes(sub_g, {u: u for u in nodes}, 'link')
+    sub_g = nx.relabel_nodes(sub_g, {u: i+1 for i, u in enumerate(nodes)})
+
+    plots.append(hvnx.draw(
+        sub_g, 
+        height=300, 
+        width=600, 
+        random_seed=10, 
+        node_size=[G.in_degree(node_dic[u])*50 + 100 for u in sub_g.nodes], 
+        node_color=[G.nodes[node_dic[u]]['community'] for u in sub_g.nodes], 
+        cmap='spectral', 
+        edge_width=[2 if edge in list(ngrams(range(1, len(nodes)+1), 2)) else 0.5 for edge in sub_g.edges], 
+        edge_color=['red' if edge in list(ngrams(range(1, len(nodes)+1), 2)) else 'black' for edge in sub_g.edges], 
+        arrowstyle='->', 
+        with_labels=True,
+        arrowhead_length=0.05,
+    ) 
+)
+
+(plots[0] + plots[1] + plots[2] + plots[3] + plots[4]).cols(1)
+```
+

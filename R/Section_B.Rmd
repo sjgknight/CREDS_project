@@ -1,0 +1,365 @@
+---
+title: An R Markdown document converted from "Section_B.ipynb"
+output: html_document
+---
+
+## Section B. Construct Australian benchmarks for Education research
+
+```{python}
+# import the libraries needed
+import pandas as pd
+import pyreadr
+from tqdm import tqdm
+from collections import Counter
+import networkx as nx
+import holoviews as hv
+from holoviews import opts, dim
+hv.extension('bokeh')
+import requests
+from collections import defaultdict
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+import plotly.express as px
+import json
+import hvplot.pandas
+```
+
+```{python}
+# Read data inputs and load the existing curated data for CREDS members
+dfs = {
+    field: pyreadr.read_r(f'data/{field}.RDS')[None] 
+    for field in 
+    ['members','main_data','author','TCperYear','CR','related_works','concept', 'ref_author', 'ref_concept']
+}
+
+# add Mary's publications
+
+response = requests.get('https://api.openalex.org/authors?filter=display_name.search:Mary%20Coupland')
+mary_ids = [author['id'] for author in response.json()['results']]
+mary_ids = '|'.join(mary_ids)
+response = requests.get(f'https://api.openalex.org/works?filter=author.id:{mary_ids}')
+
+df_main, df_author, df_tc_per_year, df_cr, df_rw, df_concept = [], [], [], [], [], []
+for line in response.json()['results']:
+    df_main.append(
+        {
+            'id': line['id'],
+            'TI': line['title'],
+            'PY': line['publication_year'],
+            'SO': line['host_venue']['display_name'],
+            'SO_ID': line['host_venue']['id'],
+            'TC': line['cited_by_count'],
+        }
+    )
+    for author in line['authorships']:
+        df_author.append(
+            {
+                'au_id': author['author']['id'],
+                'au_name': author['author']['display_name'],
+                'au_orcid': author['author']['orcid'],
+                'au_position': author['author_position'],
+                'au_affiliation_raw': author['raw_affiliation_string'],
+                'institution_id': author['institutions'][0]['id'] if author['institutions'] else None,
+                'institution_name':  author['institutions'][0]['display_name'] if author['institutions'] else None,
+                'institution_ror': author['institutions'][0]['ror'] if author['institutions'] else None,
+                'institution_country': author['institutions'][0]['country_code'] if author['institutions'] else None,
+                'institution_type': author['institutions'][0]['type'] if author['institutions'] else None,
+                'paper_id': line['id'],
+            }
+        )
+    for tc in line['counts_by_year']:
+        df_tc_per_year.append(
+            {
+                'year': tc['year'], 
+                'TC': tc['cited_by_count'],
+                'paper_id': line['id']
+            }
+        )
+    for cr in line['referenced_works']:
+        df_cr.append(
+            {
+                'CR': cr,
+                'paper_id': line['id']
+            }
+        )
+    for rw in line['related_works']:
+        df_rw.append(
+            {
+                'related_works': rw,
+                'paper_id': line['id']
+            }
+        )
+    for concept in line['concepts']:
+        df_concept.append(
+            {
+                'concept_id': concept['id'],
+                'concept_name': concept['display_name'],
+                'concept_score': concept['score'],
+                'concept_lecel': concept['level'],
+                'concept_url': concept['wikidata'],
+                'paper_id': line['id']
+            }
+        )
+        
+dfs['main_data'] = dfs['main_data'].append(pd.DataFrame.from_dict(df_main)).drop_duplicates()
+dfs['author'] = dfs['author'].append(pd.DataFrame.from_dict(df_author)).drop_duplicates()
+dfs['TCperYear'] = dfs['TCperYear'].append(pd.DataFrame.from_dict(df_tc_per_year)).drop_duplicates()
+dfs['CR'] = dfs['CR'].append(pd.DataFrame.from_dict(df_cr)).drop_duplicates()
+dfs['related_works'] = dfs['related_works'].append(pd.DataFrame.from_dict(df_rw)).drop_duplicates()
+dfs['concept'] = dfs['concept'].append(pd.DataFrame.from_dict(df_concept)).drop_duplicates()
+
+valid_names = list(dfs['members']['FirstName'] + ' ' + dfs['members']['LastName'])
+
+# manually add all possible appeared names to the valid name list
+valid_names.append('Dilek Cetindamar')
+valid_names.append('Sandy Schuck')
+
+# unify the identified author name
+dfs['author'].loc[dfs['author']['au_name'] == 'S. J. Buckingham Shum', 'au_id'] = "https://openalex.org/A2123583348"
+dfs['author'].loc[dfs['author']['au_name'] == 'S. J. Buckingham Shum', 'au_name'] = "Simon Buckingham Shum"
+dfs['author'].loc[dfs['author']['au_name'] == 'Simon Buckingham Shum', 'au_id'] = "https://openalex.org/A2123583348"
+dfs['author'].loc[dfs['author']['au_name'] == 'Bhuva Narayan', 'au_id'] = "https://openalex.org/A2163324054"
+dfs['author'].loc[dfs['author']['au_name'] == 'Mary Coupland', 'au_id'] = "https://openalex.org/A2495552202"
+dfs['author'].loc[dfs['author']['au_name'] == 'Sandy Schuck', 'au_id'] = "https://openalex.org/A1975317455"
+dfs['author'].loc[dfs['author']['au_name'] == 'Sandy Schuck', 'au_name'] = "Sandra Schuck"
+dfs['author'].loc[dfs['author']['au_name'] == 'Sandra Schuck', 'au_id'] = "https://openalex.org/A1975317455"
+dfs['author'].loc[dfs['author']['au_name'] == 'Anne Prescott', 'au_id'] = "https://openalex.org/A2505888288"
+dfs['author'].loc[dfs['author']['au_name'] == 'Marco Angelini', 'au_id'] = "https://openalex.org/A4220214751"
+
+
+# the collection of CREDS member ids
+CREDS_au_ids = set(dfs['author'].loc[dfs['author']['au_name'].isin(valid_names)]['au_id'])
+
+# filter by id, group by name and sort by publication counts
+dfs['author'].loc[dfs['author']['au_id'].isin(CREDS_au_ids)].groupby(['au_id', 'au_name']).size().reset_index(name='publication_count').sort_values('publication_count', ascending=False)
+```
+
+```{python}
+# Filter by recent ten years
+
+paper_ids = set(dfs['main_data'].loc[dfs['main_data']['PY'] >= 2012]['id'])
+dfs['main_data'] = dfs['main_data'].loc[dfs['main_data']['id'].isin(paper_ids)]
+
+for key, value in dfs.items():
+    if key not in ['main_data', 'members', 'ref_author', 'ref_concept']:
+        dfs[key] = dfs[key].loc[dfs[key]['paper_id'].isin(paper_ids)]
+```
+
+### B1. Citation performance of CREDS members
+
+```{python}
+# merge TC and main tables, right join means all the 843 papers will be included
+citation_merged = pd.merge(dfs['TCperYear'], dfs['main_data'], how='right', left_on='paper_id', right_on='id')
+
+# insert a new column 'three_year_citation' that only keeps citations within 3 years after publication
+citation_merged.loc[citation_merged['year'] < citation_merged['PY'] + 3, 'three_year_citation'] = citation_merged['TC_x']
+
+# fill the NA values with 0
+citation_merged['three_year_citation'] = citation_merged['three_year_citation'].fillna(0)
+
+# group by publication year and id
+CREDS_citation = citation_merged.groupby(['PY', 'id']).agg({'TC_y':'mean', 'three_year_citation': 'sum'}).reset_index()
+
+# total citation
+CREDS_citation['total_citation'] = CREDS_citation['TC_y']
+
+# calculate the yearly citation by = total citaion / (2023 - publication year) 
+CREDS_citation['yearly_citation'] = CREDS_citation['TC_y'] / (2023 - CREDS_citation['PY'])
+
+# avg_citation_in_3years_after_published
+CREDS_citation['avg_citation_in_3years_after_published'] = CREDS_citation['three_year_citation'] / 3
+
+CREDS_citation = CREDS_citation[['total_citation', 'yearly_citation', 'avg_citation_in_3years_after_published']]
+
+CREDS_citation.describe()
+```
+
+```{python}
+# Box plots of the three indicators
+(
+    CREDS_citation.hvplot.box(
+        y="total_citation", 
+        invert=True, 
+        ylim=(0,60)
+    ) + CREDS_citation.hvplot.box(
+        y="yearly_citation", 
+        ylim=(0,5), 
+        invert=True
+    ) + CREDS_citation.hvplot.box(
+        y="avg_citation_in_3years_after_published", 
+        ylim=(0,2), 
+        invert=True
+    )
+).cols(1)
+```
+
+### B2. Constructing a benchmark based on the concept *Education*
+### <span style="color:red"> (DONT rerun this block if you download the data folder already, rerunning it may take 10 mins+) </span>
+
+### Benchmark 1 contains papers involving the concept *Education* and have authors from Australia (52k+ papers).
+
+```{python}
+# # Warning: Running this block can consume up to 10 mins, the data is downloaded already so you can just skip this step.
+
+# import json
+# import time
+
+# f = open('data/benchmark1.txt', 'w+', encoding='UTF-8')
+
+# for year in range(1940, 2023):
+#     print(year)
+#     response = requests.get(f'https://api.openalex.org/works?filter=concepts.id:https://openalex.org/C19417346,institutions.country_code:au,publication_year:{year}&per-page=200')
+#     work_count = response.json()['meta']['count']
+#     for paper in response.json()['results']:
+#         f.write(json.dumps(paper) + '\n')
+#     if work_count > 200:
+#         for page in tqdm(range(2, int(work_count/200) + 2)):
+#             response = requests.get(f'https://api.openalex.org/works?filter=concepts.id:https://openalex.org/C19417346,institutions.country_code:au,publication_year:{year}&per-page=200&page={page}')
+#             try:
+#                 for paper in response.json()['results']:
+
+#                     f.write(json.dumps(paper) + '\n')
+#             except:
+#                 print(response)
+```
+
+```{python}
+# Citation features for benchmark 1
+
+paper_ids = []
+total_citations = []
+yearly_citations = []
+avg_citation_in_3years = []
+with open('data/benchmark1.txt', 'r', encoding='UTF-8') as f:
+    for line in tqdm(f):
+        line = json.loads(line)
+        
+        # only compare with publications in recent 10 years 
+        if line['publication_year'] >= 2012:
+            paper_ids.append(line['id'])
+            total_citations.append(line['cited_by_count'])
+            yearly_citations.append(line['cited_by_count'] / (2023 - line['publication_year']))
+            citation_in_three_years = [x['cited_by_count'] for x in line['counts_by_year'] if x['year'] in range(line['publication_year'], line['publication_year']+3)]
+            avg_citation_in_3years.append(0 if not citation_in_three_years else np.sum(citation_in_three_years)/3)
+benchmark_1_citation = pd.DataFrame([paper_ids, total_citations, yearly_citations, avg_citation_in_3years]).T
+benchmark_1_citation.columns = ['id', 'total_citation', 'yearly_citation', 'avg_citation_in_3years_after_published']
+benchmark_1_citation
+```
+
+```{python}
+benchmark_1_citation[['total_citation', 'yearly_citation', 'avg_citation_in_3years_after_published']] = benchmark_1_citation[['total_citation', 'yearly_citation', 'avg_citation_in_3years_after_published']].apply(pd.to_numeric)
+benchmark_1_citation[['total_citation', 'yearly_citation', 'avg_citation_in_3years_after_published']].describe()
+```
+
+```{python}
+CREDS_citation['data_source'] = 'CREDS'
+benchmark_1_citation['data_source'] = 'benchmark_1'
+benchmark_1_vs_CREDS = pd.concat([CREDS_citation, benchmark_1_citation])
+benchmark_1_vs_CREDS
+```
+
+```{python}
+(benchmark_1_vs_CREDS.hvplot.box(
+    y='total_citation',
+    by=['data_source'],
+    color='data_source',
+    cmap=['blue', 'orange'],
+    legend=False,
+    invert=True,
+    ylim=(0,50)
+) + benchmark_1_vs_CREDS.hvplot.box(
+    y='yearly_citation',
+    by=['data_source'],
+    color='data_source',
+    cmap=['blue', 'orange'],
+    legend=False,
+    invert=True,
+    ylim=(0,5)
+) + benchmark_1_vs_CREDS.hvplot.box(
+    y='avg_citation_in_3years_after_published',
+    by=['data_source'],
+    color='data_source',
+    cmap=['blue', 'orange'],
+    legend=False,
+    invert=True,
+    ylim=(0,3))).cols(1)
+```
+
+### B3. Constructing a bencmark based on the related works
+### <span style="color:red"> (DONT rerun this block if you download the data folder already, rerunning it may take 5 mins+) </span>
+
+### Benchmark 2 contains papers that are related works to CREDS outputs (12.2k+).
+
+```{python}
+# f = open('benchmark2.txt', 'w+', encoding='UTF-8')
+# realted_work_ids = list(set(dfs['related_works']['related_works']))
+# print(len(realted_work_ids))
+
+# for i in tqdm(range(int(len(realted_work_ids)/50) + 1)):
+#     batch_id_string = '|'.join(realted_work_ids[i*50:i*50 + 50])
+#     response = requests.get(f'https://api.openalex.org/works?filter=openalex_id:{batch_id_string}&per_page=200')
+#     for paper in response.json()['results']:
+#         f.write(json.dumps(paper) + '\n')
+```
+
+```{python}
+# Citation features for benchmark 2
+paper_ids = []
+total_citations = []
+yearly_citations = []
+avg_citation_in_3years = []
+with open('data/benchmark2.txt', 'r', encoding='UTF-8') as f:
+    for line in tqdm(f):
+        line = json.loads(line)
+        
+        # only compare with publications in recent 10 years 
+        if line['publication_year'] >= 2012:
+            paper_ids.append(line['id'])
+            total_citations.append(line['cited_by_count'])
+            yearly_citations.append(line['cited_by_count'] / (2023 - line['publication_year']))
+            citation_in_three_years = [x['cited_by_count'] for x in line['counts_by_year'] if x['year'] in range(line['publication_year'], line['publication_year']+3)]
+            avg_citation_in_3years.append(0.0 if not citation_in_three_years else np.sum(citation_in_three_years)/3)
+benchmark_2_citation = pd.DataFrame([paper_ids, total_citations, yearly_citations, avg_citation_in_3years]).T
+benchmark_2_citation.columns = ['id', 'total_citation', 'yearly_citation', 'avg_citation_in_3years_after_published']
+benchmark_2_citation
+```
+
+```{python}
+benchmark_2_citation[['total_citation', 'yearly_citation', 'avg_citation_in_3years_after_published']] = benchmark_2_citation[['total_citation', 'yearly_citation', 'avg_citation_in_3years_after_published']].apply(pd.to_numeric)
+benchmark_2_citation[['total_citation', 'yearly_citation', 'avg_citation_in_3years_after_published']].describe()
+```
+
+```{python}
+CREDS_citation['data_source'] = 'CREDS'
+benchmark_2_citation['data_source'] = 'benchmark_2'
+benchmark_2_vs_CREDS = pd.concat([CREDS_citation, benchmark_2_citation])
+benchmark_2_vs_CREDS
+```
+
+```{python}
+(benchmark_2_vs_CREDS.hvplot.box(
+    y='total_citation',
+    by=['data_source'],
+    color='data_source',
+    cmap=['blue', 'orange'],
+    legend=False,
+    invert=True,
+    ylim=(0,60)
+) + benchmark_2_vs_CREDS.hvplot.box(
+    y='yearly_citation',
+    by=['data_source'],
+    color='data_source',
+    cmap=['blue', 'orange'],
+    legend=False,
+    invert=True,
+    ylim=(0,5)
+) + benchmark_2_vs_CREDS.hvplot.box(
+    y='avg_citation_in_3years_after_published',
+    by=['data_source'],
+    color='data_source',
+    cmap=['blue', 'orange'],
+    legend=False,
+    invert=True,
+    ylim=(0,3))).cols(1)
+```
+
