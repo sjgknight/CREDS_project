@@ -51,6 +51,7 @@ lapply(nb, function(input) {
   knitr::convert_chunk_header(input = xfun::with_ext(paste0("R/",input), "Rmd"), output = xfun::with_ext(paste0("R/",input), "Qmd") )
 })
 
+
 #if you do this, probably want to prepend 
 # 	
 # ```{r}
@@ -59,7 +60,11 @@ lapply(nb, function(input) {
 #  
 # use_condaenv("r-reticulate")
 
+#assuming you're going to open them next, you can also just set that now
 
- 
+pacman::p_load(reticulate, dplyr, magrittr)
+use_condaenv("r-reticulate")
+
 ```
+
 

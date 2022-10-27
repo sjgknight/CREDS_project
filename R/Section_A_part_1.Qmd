@@ -4,6 +4,11 @@ output: html_document
 ---
 
 ## Section A_1. Bibliometric insights from CREDS research outputs
+```{r setup}
+pacman::p_load(reticulate, dplyr, magrittr)
+use_condaenv("r-reticulate")
+```
+
 
 ```{python}
 # import the libraries needed
@@ -189,10 +194,26 @@ topic_sankey.opts(width=1200, height=800)
 ```
 
 **Here I'd like to be able to filter by concept level in that DF to adjust the sankey**
+```{r}
+test <- CREDS_concept_vis
+
+```
+
+
 
 ```{python}
+# group by author and concept, generate author-concept matrix (sparse format)
+au_concept_group_leveled = au_join_concept.groupby(by=['au_id', 'concept_id', 'au_name', 'concept_name', 'concept_lecel']).agg({'paper_id': pd.Series.nunique}).reset_index().sort_values('paper_id')
+
+au_concept_group_leveled = au_concept_group_leveled[au_concept_group_leveled['concept_lecel'] >1]
+
+# filter by author and concepts
+NUM_TOPICS = 30  # Number of topic to show
+show_topics = [a[0] for a in Counter(list(au_concept_group_leveled['concept_name'])).most_common(NUM_TOPICS)]
+au_concept_group_leveled = au_concept_group_leveled.loc[au_concept_group_leveled['au_id'].isin(CREDS_au_ids)]
+
 # filter df to do visualisation
-CREDS_concept_vis = au_concept_group.loc[au_concept_group['concept_name'].isin(show_topics)]
+CREDS_concept_vis = au_concept_group_leveled.loc[au_concept_group_leveled['concept_name'].isin(show_topics)]
 topic_sankey = hv.Sankey(CREDS_concept_vis, kdims=["au_name", "concept_name"], vdims=["paper_id"])
 
 # generate a Sankey diagram and configure its appearance
@@ -209,6 +230,8 @@ topic_sankey.opts(
 
 # show the Sankey diagram
 topic_sankey.opts(width=1200, height=800)
+
+
 ```
 
 ### A3. CREDS members author-topic & correlation heatmaps
